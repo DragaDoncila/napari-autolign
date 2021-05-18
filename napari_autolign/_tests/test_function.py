@@ -1,0 +1,3 @@
+# from napari_autolign import threshold, image_arithmetic
+
+# add your tests here...
