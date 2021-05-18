@@ -5,8 +5,6 @@
 from scipy import ndimage
 import numpy as np
 from probreg import bcpd
-import tifffile
-import matplotlib.pyplot as plt
 import napari
 from magicgui import magic_factory, widgets
 from napari.types import PointsData, ImageData
