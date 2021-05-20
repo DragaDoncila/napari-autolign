@@ -27,7 +27,9 @@ You can install `napari-autolign` via [pip]:
     pip install napari-autolign
 
 When installing autolign on a Windows machine you may encounter the following error:
+
     error Microsoft Visual C++ 14.0 is required
+
 Ensure that [Visual Studios C++ 14.00](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) is installed
 
 ## Contributing
