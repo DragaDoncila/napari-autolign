@@ -27,10 +27,10 @@ def prepare_source_and_target_nonrigid_3d(source_array,
     target = o3.geometry.PointCloud()
     source.points = o3.utility.Vector3dVector(source_array)
     target.points = o3.utility.Vector3dVector(target_array)
-    source = source.voxel_down_sample(voxel_size=voxel_size)
-    target = target.voxel_down_sample(voxel_size=voxel_size)
     source = source.uniform_down_sample(every_k_points=every_k_points)
     target = target.uniform_down_sample(every_k_points=every_k_points)
+    source = source.voxel_down_sample(voxel_size=voxel_size)
+    target = target.voxel_down_sample(voxel_size=voxel_size)
     return source, target
 
 # Add choice of registratoon method and advanced settings
@@ -39,10 +39,11 @@ def make_point_cloud_registration(
     viewer: "napari.viewer.Viewer",
     moving: PointsData,
     fixed: PointsData,
+    algorithm: Annotated[str, {"choices": ["BCPD", "Rigid CPD", "Affine CPD", "RANSAC"]}]='BCPD',
     voxel_size: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 5,
     every_k_points: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 1,
-    max_iterations: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 50
-):
+    max_iterations: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 50,
+    visualise: bool=False):
 
     from napari.qt import thread_worker
 
@@ -70,9 +71,11 @@ def make_point_cloud_registration(
     @thread_worker(connect={"returned": _add_data})
     def _point_cloud_registration(moving: PointsData,
                                   fixed: PointsData,
+                                  algorithm: str='BCPD',
                                   voxel_size: int=5,
                                   every_k_points: int=1,
-                                  max_iterations: int=50):
+                                  max_iterations: int=50,
+                                  visualise: bool=False):
         start = time.time()
         source, target = prepare_source_and_target_nonrigid_3d(moving,
                                                                fixed,
@@ -80,13 +83,38 @@ def make_point_cloud_registration(
                                                                every_k_points=every_k_points)
         cbs = []
         cbs.append(RegistrationProgressCallback(max_iterations))
-        # if visualise:
-            # cbs.append(callbacks.Open3dVisualizerCallback(np.asarray(source.points), np.asarray(target.points)))
-        tf_param = bcpd.registration_bcpd(source, target, maxiter=max_iterations, callbacks=cbs)
+        if visualise:
+            cbs.append(callbacks.Open3dVisualizerCallback(source, target))
+
+        if algorithm == 'BCPD':
+            tf_param = bcpd.registration_bcpd(source,
+                                              target,
+                                              maxiter=max_iterations,
+                                              callbacks=cbs)
+
+        elif algorithm == 'Rigid CPD':
+            tf_param, __, __ = cpd.registration_cpd(source,
+                                                    target,
+                                                    tf_type_name='rigid',
+                                                    maxiter=max_iterations,
+                                                    callbacks=cbs)
+
+        elif algorithm == 'Affine CPD':
+            tf_param, __, __ = cpd.registration_cpd(source,
+                                                    target,
+                                                    tf_type_name='affine',
+                                                    maxiter=max_iterations,
+                                                    callbacks=cbs)
+        elif algorithm == 'RANSAC':
+            raise NotImplementedError
+
         elapsed = time.time() - start
         print("time: ", elapsed)
-        print("result: ", np.rad2deg(t3d.euler.mat2euler(tf_param.rigid_trans.rot)),
-              tf_param.rigid_trans.scale, tf_param.rigid_trans.t, tf_param.v)
+        if algorithm == 'BCPD':
+            print("result: ", np.rad2deg(t3d.euler.mat2euler(tf_param.rigid_trans.rot)),
+                  tf_param.rigid_trans.scale, tf_param.rigid_trans.t, tf_param.v)
+        elif algorithm == 'Rigid CPD' or algorithm == 'Affine CPD':
+            print("result: ", tf_param)
 
         return (np.asarray(source.points),
                 np.asarray(target.points),
@@ -94,6 +122,8 @@ def make_point_cloud_registration(
 
     _point_cloud_registration(moving=moving,
                               fixed=fixed,
+                              algorithm=algorithm,
                               voxel_size=voxel_size,
                               every_k_points=every_k_points,
-                              max_iterations=max_iterations)
+                              max_iterations=max_iterations,
+                              visualise=visualise)
