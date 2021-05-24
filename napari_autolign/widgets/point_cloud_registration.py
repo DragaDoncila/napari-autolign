@@ -9,6 +9,7 @@ from napari.types import PointsData
 from magicgui import magic_factory, widgets
 import napari
 from typing_extensions import Annotated
+from math import cos, sin
 
 class RegistrationProgressCallback(object):
     def __init__(self, maxiter):
@@ -18,6 +19,24 @@ class RegistrationProgressCallback(object):
     def __call__(self, *args):
         self.counter += 1
         print('{}/{}'.format(self.counter, self.maxiter))
+
+def _make_matrix_from_rigid_params(rot, trans, s):
+    "Create homogenous transformation matrix from rigid parameters"
+
+    T_a = np.array([[1., 0., 0., trans[0]],
+                    [0., 1., 0., trans[1]],
+                    [0., 0., 1., trans[2]],
+                    [0., 0., 0., 1.]])
+
+    # Probreg defines rigid transform update as: S * np.dot(points, R.T) + T
+    T_rot = np.vstack((np.hstack((rot, [[0.], [0.], [0.]])), [0., 0., 0., 1.]))
+
+    T_s = np.array([[s, 0., 0., 0.],
+                    [0., s, 0., 0.],
+                    [0., 0., s, 0.],
+                    [0., 0., 0., 1.]])
+
+    return T_a @ T_rot @ T_s
 
 def prepare_source_and_target_nonrigid_3d(source_array,
                                           target_array,
@@ -32,6 +51,8 @@ def prepare_source_and_target_nonrigid_3d(source_array,
     source = source.voxel_down_sample(voxel_size=voxel_size)
     target = target.voxel_down_sample(voxel_size=voxel_size)
     return source, target
+
+# If rigid or affine chosen --> Add path for saving csv files containing matrix
 
 # Add choice of registratoon method and advanced settings
 @magic_factory
@@ -53,7 +74,7 @@ def make_point_cloud_registration(
 
     # this function will be called after we return
     def _add_data(return_value, self=make_point_cloud_registration):
-        moving, fixed, transformed = return_value
+        moving, fixed, transformed, kwargs = return_value
         viewer.add_points(moving,
                           name='moving_points',
                           size=5,
@@ -62,10 +83,11 @@ def make_point_cloud_registration(
                           name='fixed_points',
                           size=5,
                           face_color='green')
+        viewer.add_points(moving, **kwargs)
         viewer.add_points(transformed,
-                          name='transformed_points',
-                          face_color='blue',
-                          size=5)
+                          name='transformed_points_probreg',
+                          size=5,
+                          face_color='yellow')
         self.pop(0).hide()  # remove the progress bar
 
     @thread_worker(connect={"returned": _add_data})
@@ -110,15 +132,43 @@ def make_point_cloud_registration(
 
         elapsed = time.time() - start
         print("time: ", elapsed)
+
         if algorithm == 'BCPD':
             print("result: ", np.rad2deg(t3d.euler.mat2euler(tf_param.rigid_trans.rot)),
                   tf_param.rigid_trans.scale, tf_param.rigid_trans.t, tf_param.v)
-        elif algorithm == 'Rigid CPD' or algorithm == 'Affine CPD':
-            print("result: ", tf_param)
+            kwargs = dict(name='transformed_points',
+                          face_color='blue',
+                          size=5)
+
+        elif algorithm == 'Rigid CPD':
+            print("result: ", tf_param.rot,
+                  tf_param.scale, tf_param.t)
+
+            mat = _make_matrix_from_rigid_params(tf_param.rot,
+                                                 tf_param.t,
+                                                 tf_param.scale)
+
+            kwargs = dict(name='transformed_points',
+                          face_color='blue',
+                          affine=mat,
+                          size=5)
+
+        elif algorithm == 'Affine CPD':
+            print("result: ", tf_param.b, tf_param.t)
+            mat, off = tf_param.b, tf_param.t
+
+            off = np.expand_dims(off, axis=0).T
+            mat = np.vstack((np.hstack((mat, off)), np.array([0, 0, 0, 1])))
+
+            kwargs = dict(name='transformed_points',
+                          face_color='blue',
+                          affine=mat,
+                          size=0.5) # Point sizes don't display correctly
 
         return (np.asarray(source.points),
                 np.asarray(target.points),
-                tf_param._transform(source.points))
+                tf_param._transform(source.points),
+                kwargs)
 
     _point_cloud_registration(moving=moving,
                               fixed=fixed,

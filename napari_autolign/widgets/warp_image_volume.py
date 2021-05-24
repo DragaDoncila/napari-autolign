@@ -8,6 +8,7 @@ from probreg import bcpd
 import napari
 from magicgui import magic_factory, widgets
 from napari.types import PointsData, ImageData
+from napari.layers import Points
 from typing_extensions import Annotated
 import math
 from typing import Sequence
@@ -108,40 +109,34 @@ def _make_warp(from_points, to_points, x_vals, y_vals, z_vals):
     np.seterr(**err)
     return [x_warp, y_warp, z_warp]
 
-# TODO: Use scipy.ndimage.rotate() and scipy.ndimage.shift()
-# TODO: Access transformation matrix through CSV file
-def _warp_image_volume_rigid(image,
-                             matrix,
-                             output_region,
-                             interpolation_order):
-    """Wraps scipy.ndimage.rotate() and scipy.ndimage.shift()"""
-    raise NotImplementedError
-
 # TODO: Use scipy.ndimage.affine()
 def _warp_image_volume_affine(image,
                               matrix,
-                              output_region,
+                              output_shape,
                               interpolation_order):
-    """Wraps scipy.ndimage.affine()"""
-    raise NotImplementedError
+    """Wraps scipy.ndimage.affine_transform()"""
+    inv_mat = np.linalg.inv(matrix)
+    img_wrp = ndimage.affine_transform(image, inv_mat, output_shape=output_shape)
+
+    return img_wrp
 
 def on_init(widget):
     """Initializes widget layout amd updates widget layout according to user input."""
 
-    for x in ['moving_points', 'transformed_points']:
+    for x in ['transformed_points']:
+        setattr(getattr(widget, x), 'visible', True)
+    for x in ['moving_points']:
         setattr(getattr(widget, x), 'visible', False)
 
     def toggle_transform_widget(event):
         if event.value == "Deformable":
             for x in ['moving_points', 'transformed_points']:
                 setattr(getattr(widget, x), 'visible', True)
-            for x in ['transformation_matrix']:
-                setattr(getattr(widget, x), 'visible', False)
 
         else:
-            for x in ['transformation_matrix']:
+            for x in ['transformed_points']:
                 setattr(getattr(widget, x), 'visible', True)
-            for x in ['moving_points', 'transformed_points']:
+            for x in ['moving_points']:
                 setattr(getattr(widget, x), 'visible', False)
 
     widget.transform_type.changed.connect(toggle_transform_widget)
@@ -152,10 +147,10 @@ def make_image_warping(
     moving_image: ImageData,
     fixed_image: ImageData,
     transform_type: Annotated[str, {"choices": ["Rigid", "Affine", "Deformable"]}],
-    moving_points: PointsData,
-    transformed_points: PointsData,
-    transformation_matrix: Sequence[Path],
-    interpolation_order: Annotated[int, {"min": 0, "max": 10, "step": 1}]=1,
+    moving_points: Points,
+    transformed_points: Points,
+    # transformation_matrix: Sequence[Path],
+    interpolation_order: Annotated[int, {"min": 0, "max": 5, "step": 1}]=1,
     approximate_grid: Annotated[int, {"min": 1, "max": 10, "step": 1}]=1,
     sub_division_factor: Annotated[int, {"min": 1, "max": 10, "step": 1}]=1
 ):
@@ -223,14 +218,18 @@ def make_image_warping(
     if transform_type == 'Deformable':
         _warp_image_volume(moving_image=moving_image,
                            fixed_image=fixed_image,
-                           moving_points=moving_points,
-                           transformed_points=transformed_points,
+                           moving_points=moving_points.data,
+                           transformed_points=transformed_points.data,
                            interpolation_order=interpolation_order,
                            approximate_grid=approximate_grid,
                            sub_division_factor=sub_division_factor)
 
-    elif transform_type == 'Rigid':
-        _warp_image_volume_rigid()
-
-    elif transform_type == 'Affine':
-        _warp_image_volume_affine()
+    elif transform_type == 'Affine' or transform_type == 'Rigid':
+        affine_matrix = transformed_points.affine.affine_matrix
+        print(affine_matrix)
+        img_wrp = _warp_image_volume_affine(moving_image,
+                                            affine_matrix,
+                                            fixed_image.shape,
+                                            interpolation_order)
+        viewer.add_image(img_wrp)
+        make_image_warping.pop(0).hide()
