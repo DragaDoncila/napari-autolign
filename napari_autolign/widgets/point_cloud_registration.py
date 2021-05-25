@@ -5,11 +5,12 @@ import numpy as np
 import open3d as o3
 import transforms3d as t3d
 import time
-from napari.types import PointsData
+from napari.types import PointsData, ImageData
 from magicgui import magic_factory, widgets
 import napari
 from typing_extensions import Annotated
 from math import cos, sin
+import math
 
 class RegistrationProgressCallback(object):
     def __init__(self, maxiter):
@@ -52,15 +53,38 @@ def prepare_source_and_target_nonrigid_3d(source_array,
     target = target.voxel_down_sample(voxel_size=voxel_size)
     return source, target
 
-# If rigid or affine chosen --> Add path for saving csv files containing matrix
+def on_init(widget):
+    """Initializes widget layout amd updates widget layout according to user input."""
 
-# Add choice of registratoon method and advanced settings
-@magic_factory
+    for x in ['moving', 'fixed', 'algorithm', 'visualise', 'max_iterations']:
+        setattr(getattr(widget, x), 'visible', True)
+    for x in ['fixed_image', 'voxel_size', 'every_k_points']:
+        setattr(getattr(widget, x), 'visible', False)
+
+    def toggle_registration_widget(event):
+        if event.value == "BCPD":
+            for x in ['voxel_size', 'every_k_points']:
+                setattr(getattr(widget, x), 'visible', True)
+            for x in ['fixed_image']:
+                setattr(getattr(widget, x), 'visible', False)
+
+        elif event.value == "Piecewise BCPD":
+            for x in ['fixed_image', 'voxel_size', 'every_k_points', 'max_iterations']:
+                setattr(getattr(widget, x), 'visible', True)
+
+        else:
+            for x in ['fixed_image', 'voxel_size', 'every_k_points']:
+                setattr(getattr(widget, x), 'visible', False)
+
+    widget.algorithm.changed.connect(toggle_registration_widget)
+
+@magic_factory(widget_init=on_init, layout='vertical', call_button="Register")
 def make_point_cloud_registration(
     viewer: "napari.viewer.Viewer",
     moving: PointsData,
     fixed: PointsData,
-    algorithm: Annotated[str, {"choices": ["BCPD", "Rigid CPD", "Affine CPD", "RANSAC"]}]='BCPD',
+    fixed_image: ImageData,
+    algorithm: Annotated[str, {"choices": ["BCPD", "Rigid CPD", "Affine CPD", "RANSAC", "Piecewise BCPD"]}]="Rigid CPD",
     voxel_size: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 5,
     every_k_points: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 1,
     max_iterations: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 50,
@@ -129,6 +153,49 @@ def make_point_cloud_registration(
                                                     callbacks=cbs)
         elif algorithm == 'RANSAC':
             raise NotImplementedError
+
+        elif algorithm == 'Piecewise BCPD':
+            source_out = []
+            transformed_out = []
+
+            # TODO: Loop over all bounding-boxes
+            sub_division_factor = 2
+            x_chunk = math.ceil(fixed_image.shape[1] / sub_division_factor)
+            y_chunk = math.ceil(fixed_image.shape[2]) # / sub_division_factor)
+            z_chunk = math.ceil(fixed_image.shape[0]) # / sub_division_factor)
+
+            for x in range(math.ceil(fixed_image.shape[1] / x_chunk)):
+              for y in range(math.ceil(fixed_image.shape[2] / y_chunk)):
+                for z in range(math.ceil(fixed_image.shape[0] / z_chunk)):
+                    output_region = (z * z_chunk,
+                                     x * x_chunk,
+                                     y * y_chunk,
+                                     min((z * z_chunk + z_chunk), fixed_image.shape[0]),
+                                     min((x * x_chunk + x_chunk), fixed_image.shape[1]),
+                                     min((y * y_chunk + y_chunk), fixed_image.shape[2]))
+                    x_min, y_min, z_min, x_max, y_max, z_max = output_region
+                    print(output_region)
+                    bbox = o3.geometry.AxisAlignedBoundingBox([x_min, y_min, z_min],
+                                                              [x_max, y_max, z_max])
+                    source_crop = source.crop(bbox)
+                    target_crop = target.crop(bbox)
+
+                    tf_param = bcpd.registration_bcpd(source_crop,
+                                                      target_crop,
+                                                      maxiter=max_iterations,
+                                                      callbacks=cbs)
+
+                    source_out.append(np.asarray(source_crop.points))
+                    transformed_out.append(tf_param._transform(np.asarray(source_crop.points)))
+
+            kwargs = dict(name='transformed_points',
+                          face_color='blue',
+                          size=5)
+
+            return (np.vstack(source_out),
+                    np.asarray(target.points),
+                    np.vstack(transformed_out),
+                    kwargs)
 
         elapsed = time.time() - start
         print("time: ", elapsed)

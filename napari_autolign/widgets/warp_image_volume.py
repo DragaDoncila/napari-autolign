@@ -18,9 +18,11 @@ from napari.qt import thread_worker
 def _warp_images(from_points, to_points, image, output_region, interpolation_order=5, approximate_grid=10):
     print('Entered warp_images')
     transform = _make_inverse_warp(from_points, to_points, output_region, approximate_grid)
+    print('Resampling image...')
     return ndimage.map_coordinates(np.asarray(image), transform, order=interpolation_order)
 
 def _make_inverse_warp(from_points, to_points, output_region, approximate_grid):
+    print('Make inverse warp')
     x_min, y_min, z_min, x_max, y_max, z_max = output_region
     if approximate_grid is None: approximate_grid = 1
     x_steps = (x_max - x_min) // approximate_grid
@@ -29,7 +31,7 @@ def _make_inverse_warp(from_points, to_points, output_region, approximate_grid):
 
     x, y, z = np.mgrid[x_min:x_max:x_steps*1j, y_min:y_max:y_steps*1j, z_min:z_max:z_steps*1j]
     transform = _make_warp(to_points, from_points, x, y, z)
-
+    print('Transform computed!')
     if approximate_grid != 1:
         # linearly interpolate the zoomed transform grid
         new_x, new_y, new_z = np.mgrid[x_min:x_max+1, y_min:y_max+1, z_min:z_max+1]
@@ -79,18 +81,25 @@ def _interpoint_distances(points):
     return np.sqrt(xd**2 + yd**2 + zd**2)
 
 def _make_L_matrix(points):
+    print('making L matrix')
     n = len(points)
     K = _U(_interpoint_distances(points))
+    print('K matrix')
     P = np.ones((n, 4))
+    print('P matrix')
     P[:,1:] = points
     O = np.zeros((4, 4))
-    L = np.asarray(np.bmat([[K, P],[P.transpose(), O]]))
+    print('Building block')
+    L = np.block([[K, P],[P.transpose(), O]])
+    # L = np.asarray(np.bmat([[K, P],[P.transpose(), O]]))
+    print('Built L')
     return L
 
 def _calculate_f(coeffs, points, x, y, z):
     w = coeffs[:-3]
     a1, ax, ay, az = coeffs[-4:]
     summation = np.zeros(x.shape)
+    print('Calculating f...')
     for wi, Pi in zip(w, points):
         summation += wi * _U(np.sqrt((x-Pi[0])**2 + (y-Pi[1])**2 + (z-Pi[2])**2))
     return a1 + ax*x + ay*y +az*z + summation
@@ -101,7 +110,12 @@ def _make_warp(from_points, to_points, x_vals, y_vals, z_vals):
     L = _make_L_matrix(from_points)
     V = np.resize(to_points, (len(to_points)+4, 3))
     V[-3:, :] = 0
-    coeffs = np.dot(np.linalg.pinv(L), V)
+    print('Computing pseudoinverse of L...')
+    print(L.shape)
+    # TODO: benchmark speed of numpy and scipy implementations of pinv
+    L_pseudo_inverse = np.linalg.pinv(L) # L increases with number of control points!
+    print('Done!')
+    coeffs = np.dot(L_pseudo_inverse, V)
     print('L, V, coeffs', L.shape, V.shape, coeffs.shape)
     x_warp = _calculate_f(coeffs[:,0], from_points, x_vals, y_vals, z_vals)
     y_warp = _calculate_f(coeffs[:,1], from_points, x_vals, y_vals, z_vals)
@@ -109,7 +123,6 @@ def _make_warp(from_points, to_points, x_vals, y_vals, z_vals):
     np.seterr(**err)
     return [x_warp, y_warp, z_warp]
 
-# TODO: Use scipy.ndimage.affine()
 def _warp_image_volume_affine(image,
                               matrix,
                               output_shape,
