@@ -113,6 +113,7 @@ def _make_warp(from_points, to_points, x_vals, y_vals, z_vals):
     print('Computing pseudoinverse of L...')
     print(L.shape)
     # TODO: benchmark speed of numpy and scipy implementations of pinv
+    # TODO: if piecewise non-linear transform only compute pseudoinverse once! 
     L_pseudo_inverse = np.linalg.pinv(L) # L increases with number of control points!
     print('Done!')
     coeffs = np.dot(L_pseudo_inverse, V)
@@ -129,27 +130,30 @@ def _warp_image_volume_affine(image,
                               interpolation_order):
     """Wraps scipy.ndimage.affine_transform()"""
     inv_mat = np.linalg.inv(matrix)
-    img_wrp = ndimage.affine_transform(image, inv_mat, output_shape=output_shape)
+    img_wrp = ndimage.affine_transform(input=image,
+                                       matrix=inv_mat,
+                                       output_shape=output_shape,
+                                       order=interpolation_order)
 
     return img_wrp
 
 def on_init(widget):
     """Initializes widget layout amd updates widget layout according to user input."""
 
-    for x in ['transformed_points']:
+    for x in ['transformed_points', 'interpolation_order']:
         setattr(getattr(widget, x), 'visible', True)
-    for x in ['moving_points']:
+    for x in ['moving_points', 'approximate_grid', 'sub_division_factor']:
         setattr(getattr(widget, x), 'visible', False)
 
     def toggle_transform_widget(event):
         if event.value == "Deformable":
-            for x in ['moving_points', 'transformed_points']:
+            for x in ['moving_points', 'transformed_points', 'approximate_grid', 'sub_division_factor']:
                 setattr(getattr(widget, x), 'visible', True)
 
         else:
-            for x in ['transformed_points']:
+            for x in ['transformed_points', 'interpolation_order']:
                 setattr(getattr(widget, x), 'visible', True)
-            for x in ['moving_points']:
+            for x in ['moving_points', 'approximate_grid', 'sub_division_factor']:
                 setattr(getattr(widget, x), 'visible', False)
 
     widget.transform_type.changed.connect(toggle_transform_widget)
@@ -162,7 +166,6 @@ def make_image_warping(
     transform_type: Annotated[str, {"choices": ["Rigid", "Affine", "Deformable"]}],
     moving_points: Points,
     transformed_points: Points,
-    # transformation_matrix: Sequence[Path],
     interpolation_order: Annotated[int, {"min": 0, "max": 5, "step": 1}]=1,
     approximate_grid: Annotated[int, {"min": 1, "max": 10, "step": 1}]=1,
     sub_division_factor: Annotated[int, {"min": 1, "max": 10, "step": 1}]=1
@@ -240,9 +243,9 @@ def make_image_warping(
     elif transform_type == 'Affine' or transform_type == 'Rigid':
         affine_matrix = transformed_points.affine.affine_matrix
         print(affine_matrix)
-        img_wrp = _warp_image_volume_affine(moving_image,
-                                            affine_matrix,
-                                            fixed_image.shape,
-                                            interpolation_order)
+        img_wrp = _warp_image_volume_affine(image=moving_image,
+                                            matrix=affine_matrix,
+                                            output_shape=fixed_image.shape,
+                                            interpolation_order=interpolation_order)
         viewer.add_image(img_wrp)
         make_image_warping.pop(0).hide()

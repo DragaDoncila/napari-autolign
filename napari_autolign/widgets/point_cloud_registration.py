@@ -12,6 +12,7 @@ from typing_extensions import Annotated
 from math import cos, sin
 import math
 
+# TODO: Account for piecewise maxi iterations
 class RegistrationProgressCallback(object):
     def __init__(self, maxiter):
         self.counter = 0
@@ -56,24 +57,26 @@ def prepare_source_and_target_nonrigid_3d(source_array,
 def on_init(widget):
     """Initializes widget layout amd updates widget layout according to user input."""
 
-    for x in ['moving', 'fixed', 'algorithm', 'visualise', 'max_iterations']:
+    for x in ['moving', 'fixed', 'algorithm', 'visualise', 'max_iterations', 'voxel_size', 'every_k_points']:
         setattr(getattr(widget, x), 'visible', True)
-    for x in ['fixed_image', 'voxel_size', 'every_k_points']:
+    for x in ['fixed_image', 'sub_division_factor_x', 'sub_division_factor_y', 'sub_division_factor_z']:
         setattr(getattr(widget, x), 'visible', False)
 
     def toggle_registration_widget(event):
-        if event.value == "BCPD":
-            for x in ['voxel_size', 'every_k_points']:
-                setattr(getattr(widget, x), 'visible', True)
-            for x in ['fixed_image']:
-                setattr(getattr(widget, x), 'visible', False)
+        # if event.value == "BCPD":
+        #     for x in ['voxel_size', 'every_k_points']:
+        #         setattr(getattr(widget, x), 'visible', True)
+        #     for x in ['fixed_image', 'sub_division_factor']:
+        #         setattr(getattr(widget, x), 'visible', False)
 
-        elif event.value == "Piecewise BCPD":
-            for x in ['fixed_image', 'voxel_size', 'every_k_points', 'max_iterations']:
+        if event.value == "Piecewise BCPD":
+            for x in ['fixed_image', 'voxel_size', 'every_k_points', 'max_iterations', 'sub_division_factor_x', 'sub_division_factor_y', 'sub_division_factor_z']:
                 setattr(getattr(widget, x), 'visible', True)
 
         else:
-            for x in ['fixed_image', 'voxel_size', 'every_k_points']:
+            for x in ['moving', 'fixed', 'algorithm', 'visualise', 'max_iterations', 'voxel_size', 'every_k_points']:
+                setattr(getattr(widget, x), 'visible', True)
+            for x in ['fixed_image', 'sub_division_factor_x', 'sub_division_factor_y', 'sub_division_factor_z']:
                 setattr(getattr(widget, x), 'visible', False)
 
     widget.algorithm.changed.connect(toggle_registration_widget)
@@ -81,10 +84,13 @@ def on_init(widget):
 @magic_factory(widget_init=on_init, layout='vertical', call_button="Register")
 def make_point_cloud_registration(
     viewer: "napari.viewer.Viewer",
+    algorithm: Annotated[str, {"choices": ["BCPD", "Rigid CPD", "Affine CPD", "RANSAC", "Piecewise BCPD"]}], # TODO: Make piecewise option boolean
     moving: PointsData,
     fixed: PointsData,
     fixed_image: ImageData,
-    algorithm: Annotated[str, {"choices": ["BCPD", "Rigid CPD", "Affine CPD", "RANSAC", "Piecewise BCPD"]}]="Rigid CPD",
+    sub_division_factor_x: Annotated[int, {"min": 1, "max": 10, "step": 1}] = 1,
+    sub_division_factor_y: Annotated[int, {"min": 1, "max": 10, "step": 1}] = 1,
+    sub_division_factor_z: Annotated[int, {"min": 1, "max": 10, "step": 1}] = 1,
     voxel_size: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 5,
     every_k_points: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 1,
     max_iterations: Annotated[int, {"min": 1, "max": 1000, "step": 1}] = 50,
@@ -158,11 +164,9 @@ def make_point_cloud_registration(
             source_out = []
             transformed_out = []
 
-            # TODO: Loop over all bounding-boxes
-            sub_division_factor = 2
-            x_chunk = math.ceil(fixed_image.shape[1] / sub_division_factor)
-            y_chunk = math.ceil(fixed_image.shape[2]) # / sub_division_factor)
-            z_chunk = math.ceil(fixed_image.shape[0]) # / sub_division_factor)
+            x_chunk = math.ceil(fixed_image.shape[1] / sub_division_factor_x)
+            y_chunk = math.ceil(fixed_image.shape[2] / sub_division_factor_y)
+            z_chunk = math.ceil(fixed_image.shape[0] / sub_division_factor_z)
 
             for x in range(math.ceil(fixed_image.shape[1] / x_chunk)):
               for y in range(math.ceil(fixed_image.shape[2] / y_chunk)):
@@ -173,20 +177,34 @@ def make_point_cloud_registration(
                                      min((z * z_chunk + z_chunk), fixed_image.shape[0]),
                                      min((x * x_chunk + x_chunk), fixed_image.shape[1]),
                                      min((y * y_chunk + y_chunk), fixed_image.shape[2]))
-                    x_min, y_min, z_min, x_max, y_max, z_max = output_region
-                    print(output_region)
-                    bbox = o3.geometry.AxisAlignedBoundingBox([x_min, y_min, z_min],
-                                                              [x_max, y_max, z_max])
-                    source_crop = source.crop(bbox)
-                    target_crop = target.crop(bbox)
+                    z_min, x_min, y_min, z_max, x_max, y_max = output_region
 
-                    tf_param = bcpd.registration_bcpd(source_crop,
-                                                      target_crop,
-                                                      maxiter=max_iterations,
-                                                      callbacks=cbs)
+                    bbox = o3.geometry.AxisAlignedBoundingBox([z_min, x_min, y_min],
+                                                              [z_max, x_max, y_max])
+                    z_pad, x_pad, y_pad = 50, 50, 50
+                    z_min_pad = min(0, z_min - z_pad)
+                    x_min_pad = min(0, x_min - x_pad)
+                    y_min_pad = min(0, y_min - y_pad)
+                    z_max_pad = min(fixed_image.shape[0], z_max + z_pad)
+                    x_max_pad = min(fixed_image.shape[1], x_max + x_pad)
+                    y_max_pad = min(fixed_image.shape[2], y_max + y_pad)
+                    bbox_pad = o3.geometry.AxisAlignedBoundingBox([z_min_pad, x_min_pad, y_min_pad],
+                                                                  [z_max_pad, x_max_pad, y_max_pad])
+                    source_crop = source.crop(bbox)
+                    target_crop = target.crop(bbox_pad)
 
                     source_out.append(np.asarray(source_crop.points))
-                    transformed_out.append(tf_param._transform(np.asarray(source_crop.points)))
+                    # TODO: Ensure continuity across chunks
+                    if source_crop.has_points() and target_crop.has_points():
+                        print(np.asarray(source_crop.points).shape, np.asarray(target_crop.points).shape)
+                        tf_param = bcpd.registration_bcpd(source_crop,
+                                                          target_crop,
+                                                          maxiter=max_iterations,
+                                                          callbacks=cbs)
+
+                        transformed_out.append(tf_param._transform(np.asarray(source_crop.points)))
+                    else:
+                        transformed_out.append(np.asarray(source_crop.points))
 
             kwargs = dict(name='transformed_points',
                           face_color='blue',
